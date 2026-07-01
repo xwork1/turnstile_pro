@@ -1,0 +1,22 @@
+name: turnstile_pro_example
+description: Example app for the turnstile_pro package.
+publish_to: none
+version: 1.0.0
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+  flutter: ">=3.9.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  turnstile_pro:
+    path: ../
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
