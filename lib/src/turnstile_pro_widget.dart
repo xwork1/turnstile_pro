@@ -33,7 +33,7 @@ class TurnstilePro extends StatefulWidget {
     this.onWidgetReady,
     this.controller,
     this.options = const TurnstileOptions(),
-    this.baseUrl = 'http://localhost/',
+    this.baseUrl = 'https://localhost/',
     this.action,
     this.cData,
     this.height,
@@ -59,8 +59,9 @@ class TurnstilePro extends StatefulWidget {
   /// Appearance and behavior options.
   final TurnstileOptions options;
 
-  /// Base url used for the widget's origin.
-  /// Defaults to `http://localhost/`.
+  /// Base url used for the widget's origin. Use an `https://` origin so that
+  /// the page is a secure context (required by Turnstile on iOS/WKWebView).
+  /// Defaults to `https://localhost/`.
   final String baseUrl;
 
   /// Optional `action` tag for server-side parsing.
@@ -83,10 +84,17 @@ class TurnstilePro extends StatefulWidget {
 class _TurnstileProState extends State<TurnstilePro> {
   late final WebViewController _webViewController;
   bool _ready = false;
+  bool _visible = false;
 
   @override
   void initState() {
     super.initState();
+    // Drive the appear animation from mount rather than the JS 'ready'
+    // message. On iOS/WKWebView the channel message can be delayed or missed,
+    // which would otherwise leave the widget stuck at opacity 0.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() => _visible = true);
+    });
     _webViewController = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Colors.transparent)
@@ -240,9 +248,9 @@ class _TurnstileProState extends State<TurnstilePro> {
       child: WebViewWidget(controller: _webViewController),
     );
 
-    // Appear animation.
+    // Appear animation, driven by mount (not the JS 'ready' message).
     web = AnimatedOpacity(
-      opacity: _ready ? 1.0 : 0.0,
+      opacity: _visible ? 1.0 : 0.0,
       duration: o.animationDuration,
       curve: o.curve,
       child: web,

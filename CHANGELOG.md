@@ -1,3 +1,12 @@
+## 0.1.1
+
+- Fix: widget could stay invisible on iOS/WKWebView because the appear
+  animation was gated on the JS `ready` message, which can be delayed or
+  missed. The animation is now driven from mount, so the widget is always
+  shown once laid out.
+- Change: default `baseUrl` is now `https://localhost/` so the page is a
+  secure context (recommended by Turnstile on iOS).
+
 ## 0.1.0
 
 Initial release.

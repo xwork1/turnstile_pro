@@ -2,7 +2,7 @@ name: turnstile_pro
 description: >-
   A lightweight, webview_flutter-based Cloudflare Turnstile widget with size,
   theme, auto-retry/refresh options and a controller. No flutter_inappwebview.
-version: 0.1.0
+version: 0.1.1
 repository: https://github.com/xwork1/turnstile_pro
 issue_tracker: https://github.com/xwork1/turnstile_pro/issues
 
