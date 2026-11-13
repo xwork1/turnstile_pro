@@ -17,14 +17,17 @@ incompatibilities caused by that plugin's legacy ProGuard configuration.
 - 👁️ `appearance`, and server-side `action` / `cData` tagging
 - 🖼️ Styling via `TurnstileOptions`: `borderRadius`, `backgroundColor`, appear `curve` + `animationDuration`
 - ⏳ Optional `loadingWidget` shown until the challenge is ready
-- 🎮 `TurnstileController` with `reset()` and `reload()`
-- 📣 `onTokenReceived`, `onError` (`error` / `expired` / `timeout`), `onWidgetReady`
+- ▶️ `execution: execute` mode — run the challenge on demand with `controller.execute()`
+- 🎮 `TurnstileController` (`ChangeNotifier`) with `reset()`, `reload()`, `execute()` and the current `token` / `isReady` state
+- 📣 `onTokenReceived`, `onError`, `onWidgetReady`, `onBeforeInteractive`, `onAfterInteractive`
+- 🔒 The web view never navigates away from the challenge; tapped links are reported via `onExternalLink`
+- 🔄 Changing `siteKey`, `options`, `action` or `cData` re-renders the challenge automatically
 
 ## Installation
 
 ```yaml
 dependencies:
-  turnstile_pro: ^0.1.0
+  turnstile_pro: ^0.2.0
 ```
 
 ### Platform setup
@@ -46,7 +49,9 @@ TurnstilePro(
     debugPrint('token: $token');
   },
   onError: (error) {
-    // error is one of: 'error', 'expired', 'timeout', 'parse_error'
+    // 'expired', 'timeout', 'unsupported', 'script_load_error',
+    // 'render_error: …', 'parse_error' or a Cloudflare error code
+    // such as '110200'.
     debugPrint('turnstile error: $error');
   },
 )
@@ -107,7 +112,53 @@ TurnstilePro(
 await controller.reset();
 ```
 
-Remember to dispose it:
+The controller is a `ChangeNotifier`, so it can drive UI directly:
+
+```dart
+ListenableBuilder(
+  listenable: controller,
+  builder: (context, _) => ElevatedButton(
+    onPressed: controller.hasToken ? submit : null,
+    child: const Text('Submit'),
+  ),
+)
+```
+
+### Run the challenge on demand
+
+With `TurnstileExecution.execute` the widget is rendered but the challenge only
+starts when you call `execute()` (e.g. when the form is submitted):
+
+```dart
+TurnstilePro(
+  siteKey: '...',
+  controller: controller,
+  options: const TurnstileOptions(
+    execution: TurnstileExecution.execute,
+    appearance: TurnstileAppearance.interactionOnly,
+  ),
+  onTokenReceived: (token) => submitForm(token),
+);
+
+// On submit:
+await controller.execute();
+```
+
+### Links inside the widget
+
+Cloudflare shows "Privacy" / "Terms" links in the widget. The web view never
+leaves the challenge page; tapped urls are passed to `onExternalLink` so you
+can open them yourself (e.g. with `url_launcher`):
+
+```dart
+TurnstilePro(
+  siteKey: '...',
+  onExternalLink: (url) => launchUrl(Uri.parse(url)),
+  onTokenReceived: (t) {},
+)
+```
+
+Remember to dispose the controller:
 
 ```dart
 @override
@@ -125,11 +176,14 @@ void dispose() {
 | ----------------- | ---------------------- | -------------------- | ------------------------------------------------ |
 | `siteKey`         | `String`               | —                    | Cloudflare Turnstile site key (required)         |
 | `onTokenReceived` | `ValueChanged<String>` | —                    | Called with the verification token               |
-| `onError`         | `ValueChanged<String>?`| `null`               | `error` / `expired` / `timeout` / `parse_error`  |
-| `onWidgetReady`   | `VoidCallback?`        | `null`               | Fired once the widget is rendered                |
-| `controller`      | `TurnstileController?` | `null`               | For `reset()` / `reload()`                       |
+| `onError`         | `ValueChanged<String>?`| `null`               | `expired` / `timeout` / `unsupported` / `script_load_error` / `render_error: …` / `parse_error` / Cloudflare error code |
+| `onWidgetReady`   | `VoidCallback?`        | `null`               | Fired once per page load, when rendered          |
+| `onBeforeInteractive` | `VoidCallback?`    | `null`               | Challenge is about to become interactive         |
+| `onAfterInteractive`  | `VoidCallback?`    | `null`               | Interactive challenge finished                   |
+| `onExternalLink`  | `ValueChanged<String>?`| `null`               | A link inside the widget was tapped              |
+| `controller`      | `TurnstileController?` | `null`               | `reset()` / `reload()` / `execute()`, `token`    |
 | `options`         | `TurnstileOptions`     | `TurnstileOptions()` | Appearance & behavior (see below)                |
-| `baseUrl`         | `String`               | `http://localhost/`  | Origin used for the widget                       |
+| `baseUrl`         | `String`               | `https://localhost/` | Origin used for the widget                       |
 | `action`          | `String?`              | `null`               | Server-side action tag                           |
 | `cData`           | `String?`              | `null`               | Customer data passed to the challenge            |
 | `height`          | `double?`              | per-size default     | Widget height (logical px)                       |
@@ -147,6 +201,8 @@ void dispose() {
 | `refreshExpired`     | `TurnstileRefreshMode` | `auto`             | Behavior when token expires              |
 | `refreshTimeout`     | `TurnstileRefreshMode` | `auto`             | Behavior on interactive timeout          |
 | `appearance`         | `TurnstileAppearance`  | `always`           | `always` / `execute` / `interactionOnly` |
+| `execution`          | `TurnstileExecution`   | `render`           | `render` / `execute` (on demand)         |
+| `feedbackEnabled`    | `bool`                 | `true`             | Allow Cloudflare's feedback prompt       |
 | `borderRadius`       | `BorderRadius?`        | `null`             | Corner radius (clips the widget)         |
 | `backgroundColor`    | `Color`                | transparent        | Background color                         |
 | `curve`              | `Curve`                | `Curves.easeInOut` | Appear animation curve                   |

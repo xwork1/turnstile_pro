@@ -9,3 +9,5 @@ pubspec.lock
 .idea/
 .vscode/
 *.iml
+
+.playwright-mcp/

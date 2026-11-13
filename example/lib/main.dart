@@ -64,10 +64,19 @@ class _TurnstileDemoPageState extends State<TurnstileDemoPage> {
               onTokenReceived: (token) =>
                   setState(() => _status = 'Token: $token'),
               onError: (error) => setState(() => _status = 'Error: $error'),
+              onExternalLink: (url) =>
+                  setState(() => _status = 'Link tapped: $url'),
             ),
             const SizedBox(height: 24),
             Text(_status, textAlign: TextAlign.center),
-            const SizedBox(height: 24),
+            const SizedBox(height: 12),
+            ListenableBuilder(
+              listenable: _controller,
+              builder: (context, _) => Text(
+                _controller.hasToken ? 'Has valid token' : 'No token yet',
+              ),
+            ),
+            const SizedBox(height: 12),
             ElevatedButton(
               onPressed: () => _controller.reset(),
               child: const Text('Reset'),

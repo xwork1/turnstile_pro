@@ -3,15 +3,18 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
-import 'turnstile_controller.dart';
+import 'turnstile_html.dart';
 import 'turnstile_options.dart';
+
+part 'turnstile_controller.dart';
 
 /// A lightweight, low-dependency Flutter widget that runs Cloudflare Turnstile
 /// through `webview_flutter`.
 ///
 /// It does not pull in extra native plugins (such as `flutter_inappwebview`);
 /// only the official `webview_flutter` is used. Appearance/behavior is provided
-/// through [TurnstileOptions]; use [TurnstileController] for `reset()`.
+/// through [TurnstileOptions]; use [TurnstileController] for `reset()`,
+/// `execute()` and to read the current token.
 ///
 /// ```dart
 /// TurnstilePro(
@@ -31,6 +34,9 @@ class TurnstilePro extends StatefulWidget {
     required this.onTokenReceived,
     this.onError,
     this.onWidgetReady,
+    this.onBeforeInteractive,
+    this.onAfterInteractive,
+    this.onExternalLink,
     this.controller,
     this.options = const TurnstileOptions(),
     this.baseUrl = 'https://localhost/',
@@ -47,11 +53,27 @@ class TurnstilePro extends StatefulWidget {
   final ValueChanged<String> onTokenReceived;
 
   /// Called on error / expiration / timeout.
-  /// The value is one of `error`, `expired` or `timeout`.
+  ///
+  /// The value is `expired`, `timeout`, `unsupported` (the browser is not
+  /// supported by Turnstile), `script_load_error` (the Turnstile script could
+  /// not be loaded, e.g. no network) or a Cloudflare error code
+  /// (e.g. `110200`) reported by the challenge.
   final ValueChanged<String>? onError;
 
-  /// Called once the Turnstile script has loaded and the widget is rendered.
+  /// Called once per page load, when the Turnstile widget is rendered.
   final VoidCallback? onWidgetReady;
+
+  /// Called before the challenge enters interactive mode (the visitor has to
+  /// click the checkbox).
+  final VoidCallback? onBeforeInteractive;
+
+  /// Called after the interactive challenge is left.
+  final VoidCallback? onAfterInteractive;
+
+  /// Called when the visitor taps a link inside the widget (e.g. Cloudflare's
+  /// "Privacy" / "Terms" links). The web view never navigates away from the
+  /// challenge; open the url with e.g. `url_launcher` if you want to.
+  final ValueChanged<String>? onExternalLink;
 
   /// Optional controller for programmatic control of the widget.
   final TurnstileController? controller;
@@ -98,143 +120,121 @@ class _TurnstileProState extends State<TurnstilePro> {
     _webViewController = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Colors.transparent)
+      ..setNavigationDelegate(
+        NavigationDelegate(onNavigationRequest: _onNavigationRequest),
+      )
       ..addJavaScriptChannel(
         'TurnstileChannel',
         onMessageReceived: _onMessageReceived,
-      )
-      ..loadHtmlString(_buildHtml(), baseUrl: widget.baseUrl);
+      );
 
-    widget.controller?.attach(_webViewController);
+    widget.controller?._attachState(this);
+    _load();
   }
 
   @override
   void didUpdateWidget(covariant TurnstilePro oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
-      widget.controller?.attach(_webViewController);
+      oldWidget.controller?._detachState(this);
+      widget.controller?._attachState(this);
+      widget.controller?._setReady(_ready);
     }
+    if (oldWidget.siteKey != widget.siteKey ||
+        oldWidget.baseUrl != widget.baseUrl ||
+        oldWidget.action != widget.action ||
+        oldWidget.cData != widget.cData ||
+        oldWidget.options.rendersDifferentlyFrom(widget.options)) {
+      _load();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller?._detachState(this);
+    super.dispose();
+  }
+
+  /// (Re)loads the challenge page.
+  Future<void> _load() {
+    if (_ready && mounted) setState(() => _ready = false);
+    widget.controller?._setReady(false);
+    widget.controller?._setToken(null);
+    return _webViewController.loadHtmlString(
+      buildTurnstileHtml(
+        siteKey: widget.siteKey,
+        options: widget.options,
+        action: widget.action,
+        cData: widget.cData,
+      ),
+      baseUrl: widget.baseUrl,
+    );
+  }
+
+  NavigationDecision _onNavigationRequest(NavigationRequest request) {
+    final String url = request.url;
+    // Sub-frame navigations (the Cloudflare challenge iframe) and the page
+    // itself are allowed; anything that would replace the page is blocked.
+    if (!request.isMainFrame ||
+        url.startsWith(widget.baseUrl) ||
+        url.startsWith('about:') ||
+        url.startsWith('data:')) {
+      return NavigationDecision.navigate;
+    }
+    widget.onExternalLink?.call(url);
+    return NavigationDecision.prevent;
   }
 
   void _onMessageReceived(JavaScriptMessage message) {
+    if (!mounted) return;
+    final Map<String, dynamic> data;
     try {
-      final Map<String, dynamic> data =
-          jsonDecode(message.message) as Map<String, dynamic>;
-      switch (data['type']) {
-        case 'token':
-          widget.onTokenReceived((data['token'] ?? '').toString());
-          break;
-        case 'ready':
-          if (mounted && !_ready) setState(() => _ready = true);
-          widget.onWidgetReady?.call();
-          break;
-        case 'expired':
-          widget.onError?.call('expired');
-          break;
-        case 'timeout':
-          widget.onError?.call('timeout');
-          break;
-        case 'error':
-          widget.onError?.call((data['error'] ?? 'error').toString());
-          break;
-      }
+      data = jsonDecode(message.message) as Map<String, dynamic>;
     } catch (_) {
       widget.onError?.call('parse_error');
+      return;
     }
-  }
-
-  String _jsString(String? value) =>
-      value == null ? 'undefined' : "'${value.replaceAll("'", "\\'")}'";
-
-  String _buildHtml() {
-    final TurnstileOptions o = widget.options;
-    return '''
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<style>
-  html, body { margin: 0; padding: 0; width: 100%; background: transparent; overflow: hidden; }
-  #cf { display: block; width: 100%; }
-  /* Make the iframe/div injected by Turnstile span the full width. */
-  #cf > * { width: 100% !important; margin: 0 auto !important; }
-</style>
-<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad" async defer></script>
-</head>
-<body>
-<div id="cf"></div>
-<script>
-  var turnstileWidgetId;
-  var lastWidth = 0;
-
-  function post(payload) {
-    TurnstileChannel.postMessage(JSON.stringify(payload));
-  }
-
-  function renderTurnstile() {
-    var el = document.getElementById('cf');
-    turnstileWidgetId = turnstile.render(el, {
-      sitekey: '${widget.siteKey}',
-      theme: '${o.theme.value}',
-      language: '${o.language}',
-      size: '${o.size.value}',
-      retry: '${o.retryAutomatically ? 'auto' : 'never'}',
-      'retry-interval': ${o.retryInterval},
-      'refresh-expired': '${o.refreshExpired.value}',
-      'refresh-timeout': '${o.refreshTimeout.value}',
-      appearance: '${o.appearance.value}',
-      action: ${_jsString(widget.action)},
-      cData: ${_jsString(widget.cData)},
-      callback: function (token) { post({ type: 'token', token: token }); },
-      'error-callback': function (error) { post({ type: 'error', error: String(error) }); },
-      'expired-callback': function () { post({ type: 'expired' }); },
-      'timeout-callback': function () { post({ type: 'timeout' }); }
-    });
-    lastWidth = el.clientWidth;
-    post({ type: 'ready' });
-    observeResize(el);
-  }
-
-  // Wait until layout is done and the container width is known before
-  // rendering; otherwise the flexible size locks onto a zero/small width.
-  function onTurnstileLoad() {
-    waitForWidth(0);
-  }
-
-  function waitForWidth(tries) {
-    var el = document.getElementById('cf');
-    if (el && el.clientWidth > 0) {
-      renderTurnstile();
-    } else if (tries < 120) {
-      requestAnimationFrame(function () { waitForWidth(tries + 1); });
-    } else {
-      renderTurnstile();
+    final TurnstileController? controller = widget.controller;
+    switch (data['type']) {
+      case 'token':
+        final String token = (data['token'] ?? '').toString();
+        controller?._setToken(token);
+        widget.onTokenReceived(token);
+        break;
+      case 'ready':
+        if (!_ready) setState(() => _ready = true);
+        controller?._setReady(true);
+        widget.onWidgetReady?.call();
+        break;
+      case 'reset':
+        controller?._setToken(null);
+        break;
+      case 'before-interactive':
+        widget.onBeforeInteractive?.call();
+        break;
+      case 'after-interactive':
+        widget.onAfterInteractive?.call();
+        break;
+      case 'expired':
+        controller?._setToken(null);
+        widget.onError?.call('expired');
+        break;
+      case 'timeout':
+        controller?._setToken(null);
+        widget.onError?.call('timeout');
+        break;
+      case 'unsupported':
+        controller?._setToken(null);
+        widget.onError?.call('unsupported');
+        break;
+      case 'script-error':
+        widget.onError?.call('script_load_error');
+        break;
+      case 'error':
+        controller?._setToken(null);
+        widget.onError?.call((data['error'] ?? 'error').toString());
+        break;
     }
-  }
-
-  // Re-render if the container width changes (e.g. orientation change).
-  function observeResize(el) {
-    if (typeof ResizeObserver === 'undefined') return;
-    var ro = new ResizeObserver(function () {
-      var w = el.clientWidth;
-      if (w > 0 && Math.abs(w - lastWidth) > 2) {
-        lastWidth = w;
-        try { turnstile.remove(turnstileWidgetId); } catch (e) {}
-        renderTurnstile();
-      }
-    });
-    ro.observe(el);
-  }
-
-  function turnstileReset() {
-    if (typeof turnstile !== 'undefined' && turnstileWidgetId !== undefined) {
-      turnstile.reset(turnstileWidgetId);
-    }
-  }
-</script>
-</body>
-</html>
-''';
   }
 
   @override

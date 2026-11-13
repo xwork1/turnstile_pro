@@ -65,3 +65,17 @@ enum TurnstileAppearance {
 
   final String value;
 }
+
+/// When the challenge runs. Maps to Cloudflare's `execution` option.
+enum TurnstileExecution {
+  /// The challenge runs automatically after the widget is rendered.
+  render('render'),
+
+  /// The challenge runs only when [TurnstileController.execute] is called
+  /// (e.g. on form submit).
+  execute('execute');
+
+  const TurnstileExecution(this.value);
+
+  final String value;
+}
